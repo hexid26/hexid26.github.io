@@ -49,18 +49,18 @@
   </section>
   <div id="runtimeNotice" class="runtime-notice" role="alert" hidden><strong>AI 已生成游戏，但运行时发生错误</strong><p>这次是游戏代码的执行问题，不代表本地模型未运行。下方显示实际错误，方便定位。</p><pre id="runtimeMessage"></pre><button id="copyDebug" type="button">复制错误和游戏代码</button></div>
   <div class="controls"><button id="restart" disabled>↻ 再玩这局</button><button id="next" disabled>✦ AI 生成新游戏</button></div>
-  <div class="small"><p>刷新页面也会生成新游戏。</p><select id="model" aria-label="选择本地 AI 模型"><option value="small32" selected>默认 · 0.5B Q4 + FP32</option><option value="small16">对照 · 0.5B Q4 + FP16</option><option value="large16">加强 · 1.5B Q4 + FP16</option></select></div>
+  <div class="small"><p>刷新页面也会生成新游戏。</p><select id="model" aria-label="选择本地 AI 模型"><option value="small32" selected>默认 · 0.5B Q4 + FP32</option><option value="small16">对照 · 0.5B Q4 + FP16</option><option value="large16">加强 · 1.5B Q4 + FP16</option><option value="cpu">备用 · CPU WASM · 0.5B Q8（较慢）</option></select></div>
   <aside class="compute-note" aria-label="本地 AI 推理方式说明">
     <strong>当前推理：GPU（WebGPU）</strong> · 游戏 AI 在本机运行，不会调用手机 NPU。<br>
-    <strong>备用方案：</strong>浏览器 CPU（WebAssembly）推理正在评估，当前尚未开放。<br>
+    <strong>备用方案：</strong>浏览器 CPU（WebAssembly）备用推理现已加入试验，需另行下载约 640 MB 模型，速度可能明显较慢。<br>
     <strong>后续探索：</strong>NPU 原生加速，暂无上线时间。
   </aside>
-  <footer>QuickJoy AI 游戏执行诊断版 v0.7 · 纯浏览器运行 · WebGPU + WebLLM · 不使用预设玩法或云端 AI<br>生成质量与速度取决于设备、浏览器及模型能力，试玩版可能出现不完整的游戏。</footer>
+  <footer>QuickJoy AI 双后端测试版 v0.8 · 纯浏览器运行 · WebGPU + WebLLM · 不使用预设玩法或云端 AI<br>生成质量与速度取决于设备、浏览器及模型能力，试玩版可能出现不完整的游戏。</footer>
 </main>
 <script type="module">
   const $ = id => document.getElementById(id);
   const els = { overlay:$('overlay'),game:$('game'), heading:$('heading'),detail:$('detail'),fill:$('fill'),hint:$('hint'),error:$('error'),diagnostic:$('diagnostic'),retry:$('retry'),stop:$('stop'),device:$('device'),runtime:$('runtime'),restart:$('restart'),next:$('next'),model:$('model'),runtimeNotice:$('runtimeNotice'),runtimeMessage:$('runtimeMessage'),copyDebug:$('copyDebug') };
-  let engine=null, currentHTML='', busy=false, activeModel='', startStamp=0;
+  let engine=null, cpuPipe=null, cpuLib=null, currentHTML='', busy=false, activeModel='', startStamp=0;
   let progressTicker=null, generationStartedAt=0, latestUpdateAt=0, producedChars=0, aborted=false;
   let phase='尚未启动', wasBackgrounded=false, gpuMode='未知';
   let lastProgressText='无', currentModelSources={}, lastRuntimeError='';
@@ -97,6 +97,7 @@
     els.runtime.textContent='需要处理';els.overlay.hidden=false;els.game.style.display='none';
     els.error.hidden=false;els.retry.hidden=false;
     const gpuError=isGpuFailure(err);
+    if(els.model.value==='cpu'){cpuPipe=null;activeModel='';}
     if(gpuError){engine=null;activeModel='';}
     els.retry.textContent=gpuError?'重建 GPU 并重试':'重试 AI 生成';
     els.error.textContent=String(err?.message||err||'未知错误').slice(0,850);
@@ -108,7 +109,7 @@
       '期间切换过后台：'+(wasBackgrounded?'是':'未检测到'),
       '模型加载的最后提示：'+lastProgressText,
       gpuError?'错误类型：WebGPU 缓冲区映射异常':'错误类型：其他生成异常',
-      gpuError?'已重置推理实例。请在浏览器前台重试；如果再次失败，把出错环节和字符数告诉我。':'请记录出错环节和上面的错误信息。'
+      gpuError?'当前 GPU 推理不稳定。可在下方下拉框选择「备用 · CPU WASM」绕过 WebGPU 测试（首次需另行下载模型）。':'请记录出错环节和上面的错误信息。'
     ].join(String.fromCharCode(10));
     if(isFetchFailure(err)){
       els.diagnostic.textContent+=String.fromCharCode(10)+'正在检测模型下载来源…';
@@ -117,7 +118,7 @@
       }).catch(e=>{els.diagnostic.textContent+=String.fromCharCode(10)+'网络检查失败：'+String(e?.message||e);});
     }
     setStatus(gpuError?'WebGPU 推理异常':title,gpuError?
-      '推理实例可能失效；点击重试将重新创建 GPU 会话。不会切换到预设游戏。':
+      'GPU 推理发生错误。可以重试，或在下方选择 CPU WASM 备用模式。仍由本地 AI 生成游戏。':
       '生成未成功。不会用固定小游戏替代 AI。');
     els.restart.disabled=!currentHTML;els.next.disabled=true;
   };
@@ -129,7 +130,39 @@
   function wrapSandbox(code){const viewport=/<meta[^>]+name=["']viewport["']/i.test(code)?'':'<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">';const injection=viewport+securityHeader+errorBridge;return /<head(\s[^>]*)?>/i.test(code)?code.replace(/<head(\s[^>]*)?>/i,m=>m+injection):code.replace(/<html(\s[^>]*)?>/i,m=>m+'<head>'+injection+'</head>');}
   function render(code){currentHTML=code;clearInterval(progressTicker);els.fill.style.animation='none';els.stop.hidden=true;els.model.disabled=false;els.overlay.hidden=true;els.runtimeNotice.hidden=true;lastRuntimeError='';els.game.style.display='block';els.game.srcdoc=wrapSandbox(code);els.restart.disabled=false;els.next.disabled=false;els.runtime.textContent='正在游玩';}
   const ideas = ()=>{const b=new Uint32Array(4);crypto.getRandomValues(b);return [...b].map(x=>x.toString(36)).join('-')};
+  async function setupCpu(){
+    const cpuModel='onnx-community/Qwen2.5-Coder-0.5B-Instruct';
+    const runtimeId='CPU-WASM-Q8:'+cpuModel;
+    gpuMode='CPU · WebAssembly · Q8（无需 WebGPU）';
+    els.device.textContent=gpuMode;
+    if(cpuPipe&&activeModel===runtimeId)return;
+    if(engine){try{await engine.unload?.()}catch{}engine=null;}
+    phase='导入 CPU 推理库';
+    lastProgressText='正在加载 Transformers.js 与 ONNX Runtime';
+    setStatus('初始化 CPU 本地 AI','CPU 模式不使用 GPU，首次会另行下载约 640 MB 量化模型。',0);
+    cpuLib=await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1');
+    cpuLib.env.allowLocalModels=false;
+    cpuLib.env.useBrowserCache=true;
+    cpuLib.env.backends.onnx.wasm.numThreads=1;
+    phase='CPU 下载 / 初始化模型';
+    cpuPipe=await cpuLib.pipeline('text-generation',cpuModel,{
+      device:'wasm',dtype:'q8',
+      progress_callback:r=>{
+        if(r?.status==='progress'){
+          lastProgressText=(r.file||'模型文件')+' '+(typeof r.progress==='number'?Math.round(r.progress)+'%':'下载中');
+          setStatus('正在加载 CPU 本地模型',lastProgressText,typeof r.progress==='number'?r.progress:null);
+        }else if(r?.status==='initiate'||r?.status==='download'||r?.status==='done'){
+          lastProgressText=(r.file||'模型文件')+' · '+r.status;
+          setStatus('准备 CPU 本地模型',lastProgressText);
+        }
+      }
+    });
+    activeModel=runtimeId;
+    phase='CPU 模型已就绪';
+    lastProgressText='CPU 量化模型加载完成';
+  }
   async function setup(){
+    if(els.model.value==='cpu'){await setupCpu();return;}
     phase='检测 WebGPU';
     if(!navigator.gpu)throw new Error('当前浏览器未提供 WebGPU。请使用支持 WebGPU 的新版手机浏览器，避免在应用内置浏览器中打开。');
     const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw new Error('浏览器无法取得 GPU 适配器。请尝试系统 Chrome / Safari、更新系统或关闭省电限制。');
@@ -169,22 +202,53 @@
       : `模型已就绪，正在推理 · 已用时 ${seconds} 秒${seconds>=45?'（手机生成可能较慢）':''}`;
     setStatus('AI 正在创造一款新游戏',detail);
     els.runtime.textContent='生成中 '+seconds+'s';
-    if(seconds>=240&&!aborted){
+    if(seconds>=240&&!aborted&&els.model.value!=='cpu'){
       aborted=true;els.hint.textContent='已超过 4 分钟，正在尝试停止本次生成。';
       try{engine?.interruptGenerate?.()}catch{}
     }
+  }
+  function cpuPrompt(){
+    const nonce=ideas();
+    return [
+      {role:'system',content:'Create one complete HTML document for a UNIQUE 15 second one-finger mobile microgame. You invent ALL rules, art, interaction and code; no fixed game templates. Output ONLY <!doctype html> through </html>. Include viewport meta, title, inline style, body, and inline script. Use simple colorful HTML elements or canvas and pointer events. Game must fit full mobile screen, with score and a visible end after 15 seconds. All variables must be defined. No external assets or network. Make the code extremely concise and playable; output all closing tags.'},
+      {role:'user',content:'Create an original surprising tiny game. Novelty seed: '+nonce+'. Avoid familiar game types. HTML ONLY.'}
+    ];
+  }
+  function cpuOutputText(res){
+    const val=res?.[0]?.generated_text;
+    if(typeof val==='string')return val;
+    if(Array.isArray(val))return val.map(x=>x?.content||'').join('');
+    return '';
+  }
+  async function cpuGenerate(){
+    phase='CPU 正在本地生成游戏 HTML';
+    let out='';
+    const streamer=new cpuLib.TextStreamer(cpuPipe.tokenizer,{
+      skip_prompt:true,
+      callback_function:fragment=>{
+        if(fragment){out+=fragment;producedChars=out.length;latestUpdateAt=performance.now();}
+      }
+    });
+    const result=await cpuPipe(cpuPrompt(),{
+      max_new_tokens:1200,temperature:0.78,top_p:0.9,do_sample:true,
+      return_full_text:false,streamer
+    });
+    return out||cpuOutputText(result);
   }
   async function generate(){
     if(busy)return;
     busy=true;aborted=false;wasBackgrounded=false;phase='准备模型';showLoading();els.stop.disabled=false;els.stop.textContent='停止生成';generationStartedAt=0;producedChars=0;startStamp=performance.now();
     try{
       await setup();
-      phase='生成游戏代码（GPU 推理）';generationStartedAt=performance.now();latestUpdateAt=generationStartedAt;producedChars=0;
+      const usingCpu=els.model.value==='cpu';
+      phase=usingCpu?'生成游戏代码（CPU WASM 推理）':'生成游戏代码（GPU 推理）';generationStartedAt=performance.now();latestUpdateAt=generationStartedAt;producedChars=0;
       els.fill.style.width='35%';els.fill.style.animation='scan 1.2s ease-in-out infinite alternate';
-      els.stop.hidden=false;els.hint.textContent='模型已加载完成；下方显示 AI 实际生成的字符数量，不是下载进度。';
+      els.stop.hidden=usingCpu;els.hint.textContent=usingCpu?'CPU 模式无需 GPU，但生成 1200 tokens 可能需要数分钟，请保持页面前台。':'模型已加载完成；下方显示 AI 实际生成的字符数量，不是下载进度。';
       generationStatus();progressTicker=setInterval(generationStatus,1000);
       let gameCode='',lastError;
-      for(let attempt=1;attempt<=2;attempt++){
+      if(usingCpu){
+        gameCode=checkResponse(cleanResponse(await cpuGenerate()));
+      }else for(let attempt=1;attempt<=2;attempt++){
         if(aborted)throw new Error('生成已停止。你可以点击“重试 AI 生成”。');
         producedChars=0;latestUpdateAt=performance.now();
         els.hint.textContent=attempt===1?'模型正在本机逐字生成游戏代码。':'第一次代码不完整，AI 正在重新编写。';
@@ -212,11 +276,11 @@
   }
   function restart(){if(!currentHTML)return;els.runtimeNotice.hidden=true;lastRuntimeError='';els.game.srcdoc=wrapSandbox(currentHTML);els.runtime.textContent='重玩本局';}
   els.restart.addEventListener('click',restart);
-  els.copyDebug.addEventListener('click',async()=>{const report='QuickJoy AI v0.7\n'+(els.device.textContent||'')+'\n错误：'+lastRuntimeError+'\n\n=== AI 生成的 HTML ===\n'+currentHTML;try{await navigator.clipboard.writeText(report);els.copyDebug.textContent='已复制，可发给我分析';}catch(e){els.copyDebug.textContent='复制失败，请直接截图错误';}});
+  els.copyDebug.addEventListener('click',async()=>{const report='QuickJoy AI v0.8\n'+(els.device.textContent||'')+'\n错误：'+lastRuntimeError+'\n\n=== AI 生成的 HTML ===\n'+currentHTML;try{await navigator.clipboard.writeText(report);els.copyDebug.textContent='已复制，可发给我分析';}catch(e){els.copyDebug.textContent='复制失败，请直接截图错误';}});
   els.next.addEventListener('click',generate);
   els.retry.addEventListener('click',generate);
   els.stop.addEventListener('click',()=>{if(!busy)return;aborted=true;els.stop.disabled=true;els.stop.textContent='正在停止…';els.hint.textContent='已请求停止本次 AI 生成。';try{engine?.interruptGenerate?.()}catch{}});
-  els.model.addEventListener('change',()=>{activeModel='';engine=null;generate()});
+  els.model.addEventListener('change',()=>{if(busy)return;activeModel='';if(els.model.value==='cpu')engine=null;else cpuPipe=null;generate()});
   window.addEventListener('message',e=>{if(e.source!==els.game.contentWindow||e.data?.quickjoy!=='runtime-error')return;lastRuntimeError=String(e.data.message||'未知错误')+'\n位置：'+String(e.data.location||'未知');els.runtime.textContent='游戏运行有异常';els.runtimeMessage.textContent=lastRuntimeError;els.runtimeNotice.hidden=false;els.copyDebug.textContent='复制错误和游戏代码';});
   document.addEventListener('visibilitychange',()=>{
     if(document.hidden&&busy)wasBackgrounded=true;
