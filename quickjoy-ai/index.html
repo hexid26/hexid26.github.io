@@ -51,7 +51,7 @@
   <div class="controls"><button id="restart" disabled>↻ 再玩这局</button><button id="next" disabled>✦ AI 生成新游戏</button></div>
   <div class="small"><p>刷新页面也会生成新游戏。</p><select id="model" aria-label="选择本地 AI 模型"><option value="small32" selected>默认 · 0.5B Q4 + FP32</option><option value="small16">对照 · 0.5B Q4 + FP16</option><option value="large16">加强 · 1.5B Q4 + FP16</option><option value="cpu">备用 · CPU WASM · 0.5B Q8（较慢）</option></select></div>
   <aside class="compute-note" aria-label="本地 AI 推理方式说明">
-    <strong>当前推理：GPU（WebGPU）</strong> · 游戏 AI 在本机运行，不会调用手机 NPU。<br>
+    <strong>GPU 模式：</strong>WebLLM + WebGPU；<strong>CPU 备用模式：</strong>Transformers.js + WASM。两种模式均在本机运行，不调用手机 NPU。<br>
     <strong>备用方案：</strong>浏览器 CPU（WebAssembly）备用推理现已加入试验，需另行下载约 640 MB 模型，速度可能明显较慢。<br>
     <strong>后续探索：</strong>NPU 原生加速，暂无上线时间。
   </aside>
