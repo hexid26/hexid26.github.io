@@ -22,6 +22,7 @@
     .small{display:flex;align-items:center;justify-content:space-between;gap:10px}.small select{border:1px solid #ffffff26;border-radius:9px;background:#1b2038;color:white;padding:7px 8px;font-size:11px;max-width:60%}
     .message{font-size:12px;background:#ff5a5a17;color:#ffbbbb;padding:12px;border-radius:11px;border:1px solid #ff7d7d42;line-height:1.6;overflow-wrap:anywhere}
     footer{font-size:10px;color:#7782a8;text-align:center;line-height:1.6;padding:5px}
+    @keyframes scan{from{transform:translateX(0)}to{transform:translateX(185%)}}
     [hidden]{display:none!important}
   </style>
 </head>
@@ -36,7 +37,7 @@
       <div class="bar"><div id="fill" class="fill"></div></div>
       <div class="note" id="hint">不会上传游戏操作数据，游戏代码由你的设备生成。</div>
       <div class="message" id="error" hidden></div>
-      <button id="retry" hidden style="border:0;border-radius:12px;background:#b4fb80;padding:12px 22px;font-weight:800;color:#13192d">重新尝试</button>
+      <button id="retry" hidden style="border:0;border-radius:12px;background:#b4fb80;padding:12px 22px;font-weight:800;color:#13192d">重新尝试</button><button id="stop" hidden style="border:1px solid #ffffff44;border-radius:12px;background:#303752;color:#fff;padding:10px 20px;font-weight:700">停止生成</button>
     </div>
     <iframe id="game" title="AI 为你生成的小游戏" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
   </section>
@@ -46,19 +47,20 @@
 </main>
 <script type="module">
   const $ = id => document.getElementById(id);
-  const els = { overlay:$('overlay'),game:$('game'), heading:$('heading'),detail:$('detail'),fill:$('fill'),hint:$('hint'),error:$('error'),retry:$('retry'),device:$('device'),runtime:$('runtime'),restart:$('restart'),next:$('next'),model:$('model') };
+  const els = { overlay:$('overlay'),game:$('game'), heading:$('heading'),detail:$('detail'),fill:$('fill'),hint:$('hint'),error:$('error'),retry:$('retry'),stop:$('stop'),device:$('device'),runtime:$('runtime'),restart:$('restart'),next:$('next'),model:$('model') };
   let engine=null, currentHTML='', busy=false, activeModel='', startStamp=0;
+  let progressTicker=null, generationStartedAt=0, latestUpdateAt=0, producedChars=0, aborted=false;
   let history=[]; try{history=JSON.parse(localStorage.getItem('quickjoy-history')||'[]').slice(-5)}catch{}
   const setStatus=(title,detail,percent=null)=>{els.heading.textContent=title;els.detail.textContent=detail;if(percent!==null)els.fill.style.width=Math.min(100,Math.max(0,percent))+'%'};
-  const showLoading=()=>{els.overlay.hidden=false;els.game.style.display='none';els.restart.disabled=true;els.next.disabled=true;els.error.hidden=true;els.retry.hidden=true;};
-  const showError=(title,err)=>{busy=false;els.runtime.textContent='需要处理';els.overlay.hidden=false;els.game.style.display='none';els.error.hidden=false;els.retry.hidden=false;els.retry.textContent='重试 AI 生成';els.error.textContent=String(err?.message||err||'未知错误').slice(0,850);setStatus(title,'不会用固定小游戏替代 AI。请检查浏览器、网络和设备资源。');els.restart.disabled=!currentHTML;els.next.disabled=true};
+  const showLoading=()=>{els.overlay.hidden=false;els.game.style.display='none';els.restart.disabled=true;els.next.disabled=true;els.error.hidden=true;els.retry.hidden=true;els.stop.hidden=true;els.model.disabled=true;els.fill.style.animation='none';els.hint.textContent='模型在本机运行；生成游戏代码需要额外时间。';};
+  const showError=(title,err)=>{busy=false;clearInterval(progressTicker);els.fill.style.animation='none';els.stop.hidden=true;els.model.disabled=false;els.runtime.textContent='需要处理';els.overlay.hidden=false;els.game.style.display='none';els.error.hidden=false;els.retry.hidden=false;els.retry.textContent='重试 AI 生成';els.error.textContent=String(err?.message||err||'未知错误').slice(0,850);setStatus(title,'不会用固定小游戏替代 AI。请检查浏览器、网络和设备资源。');els.restart.disabled=!currentHTML;els.next.disabled=true};
   const pctFromProgress=report=>{if(typeof report?.progress==='number')return Math.min(100,Math.round(report.progress*100));return null};
   const cleanResponse=text=>{let out=String(text||'').trim().replace(/^```(?:html)?\s*/i,'').replace(/\s*```$/,'');const start=out.search(/<!doctype\s+html|<html\b/i);if(start>0)out=out.slice(start);const end=out.search(/<\/html>/i);if(end>=0)out=out.slice(0,end+7);return out};
   function checkResponse(code){if(!/<html\b/i.test(code)||!/<script\b/i.test(code)||!/<\/script>/i.test(code)||!/<\/html>/i.test(code))throw new Error('AI 没有输出完整的 HTML 游戏。');if(code.length<600)throw new Error('AI 输出的小游戏过短，无法可靠运行。');if(code.length>45000)throw new Error('AI 输出超出试玩版允许的代码长度。');return code;}
   const securityHeader = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none'; img-src data: blob:; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; media-src 'none'">`;
   const errorBridge = `<script>window.addEventListener('error',function(e){parent.postMessage({quickjoy:'runtime-error',message:String(e.message||'运行错误')},'*')});window.addEventListener('unhandledrejection',function(e){parent.postMessage({quickjoy:'runtime-error',message:String(e.reason||'异步错误')},'*')});<\/script>`;
   function wrapSandbox(code){return code.replace(/<head(\s[^>]*)?>/i,match=>match+securityHeader+errorBridge)}
-  function render(code){currentHTML=code;els.overlay.hidden=true;els.game.style.display='block';els.game.srcdoc=wrapSandbox(code);els.restart.disabled=false;els.next.disabled=false;els.runtime.textContent='正在游玩';}
+  function render(code){currentHTML=code;clearInterval(progressTicker);els.fill.style.animation='none';els.stop.hidden=true;els.model.disabled=false;els.overlay.hidden=true;els.game.style.display='block';els.game.srcdoc=wrapSandbox(code);els.restart.disabled=false;els.next.disabled=false;els.runtime.textContent='正在游玩';}
   const ideas = ()=>{const b=new Uint32Array(4);crypto.getRandomValues(b);return [...b].map(x=>x.toString(36)).join('-')};
   async function setup(){
     if(!navigator.gpu)throw new Error('当前浏览器未提供 WebGPU。请使用支持 WebGPU 的新版手机浏览器，避免在应用内置浏览器中打开。');
@@ -81,24 +83,61 @@
     {role:'user',content:`Invent an entirely new micro-game. Diversity nonce: ${ideas()}. The previous ideas were: ${recent}. Do NOT repeat their interaction or goals. Make one unique satisfying 15-30 second game playable on a phone. Create complete, syntactically valid HTML including real script with event listeners. Output HTML ONLY.`}];
   }
   function recordHistory(code){const title=(code.match(/<title[^>]*>([^<]{1,80})<\/title>/i)||[])[1]||'未命名';const idea=(code.match(/<!--\s*IDEA:\s*([\s\S]{1,160}?)\s*-->/i)||[])[1]||'AI 实验玩法';history.push({title,idea});history=history.slice(-5);try{localStorage.setItem('quickjoy-history',JSON.stringify(history))}catch{}return title}
+  function generationStatus(){
+    if(!busy||!generationStartedAt)return;
+    const seconds=Math.floor((performance.now()-generationStartedAt)/1000);
+    const idle=Math.floor((performance.now()-latestUpdateAt)/1000);
+    const detail=producedChars
+      ? `已输出约 ${producedChars} 字符 · 用时 ${seconds} 秒${idle>=25?' · '+idle+' 秒没有新输出':''}`
+      : `模型已就绪，正在推理 · 已用时 ${seconds} 秒${seconds>=45?'（手机生成可能较慢）':''}`;
+    setStatus('AI 正在创造一款新游戏',detail);
+    els.runtime.textContent='生成中 '+seconds+'s';
+    if(seconds>=240&&!aborted){
+      aborted=true;els.hint.textContent='已超过 4 分钟，正在尝试停止本次生成。';
+      try{engine?.interruptGenerate?.()}catch{}
+    }
+  }
   async function generate(){
-    if(busy)return;busy=true;showLoading();startStamp=performance.now();
+    if(busy)return;
+    busy=true;aborted=false;showLoading();els.stop.disabled=false;els.stop.textContent='停止生成';generationStartedAt=0;startStamp=performance.now();
     try{
-      await setup();els.runtime.textContent='AI 编写游戏';setStatus('AI 正在创造一款新游戏','玩法、交互、素材和代码都在本机生成。',100);
-      let code='';let lastError;
+      await setup();
+      generationStartedAt=performance.now();latestUpdateAt=generationStartedAt;producedChars=0;
+      els.fill.style.width='35%';els.fill.style.animation='scan 1.2s ease-in-out infinite alternate';
+      els.stop.hidden=false;els.hint.textContent='模型已加载完成；下方显示 AI 实际生成的字符数量，不是下载进度。';
+      generationStatus();progressTicker=setInterval(generationStatus,1000);
+      let gameCode='',lastError;
       for(let attempt=1;attempt<=2;attempt++){
-        const prompts=buildPrompt();if(attempt>1)prompts[1].content+=' Previous response was incomplete. Strictly write valid full HTML.';
-        const reply=await engine.chat.completions.create({messages:prompts,temperature:0.92,top_p:0.94,max_tokens:2100});
-        try{code=checkResponse(cleanResponse(reply.choices?.[0]?.message?.content));lastError=null;break;}catch(e){lastError=e;setStatus('AI 正在修补输出',`第 ${attempt} 次输出不完整，尝试重新生成…`,100);}
+        if(aborted)throw new Error('生成已停止。你可以点击“重试 AI 生成”。');
+        producedChars=0;latestUpdateAt=performance.now();
+        els.hint.textContent=attempt===1?'模型正在本机逐字生成游戏代码。':'第一次代码不完整，AI 正在重新编写。';
+        const prompts=buildPrompt();
+        if(attempt>1)prompts[1].content+=' Previous response was incomplete. Keep output compact and always finish all closing HTML tags.';
+        gameCode='';
+        const chunks=await engine.chat.completions.create({
+          messages:prompts,temperature:0.82,top_p:0.92,max_tokens:2100,stream:true
+        });
+        for await(const chunk of chunks){
+          if(aborted)throw new Error('生成已停止或超时（4 分钟）。请点击重试。');
+          const addition=chunk.choices?.[0]?.delta?.content||'';
+          if(addition){gameCode+=addition;producedChars=gameCode.length;latestUpdateAt=performance.now();}
+        }
+        if(aborted)throw new Error('生成已停止或超时。');
+        try{gameCode=checkResponse(cleanResponse(gameCode));lastError=null;break;}
+        catch(e){lastError=e;setStatus('AI 生成内容不完整',`第 ${attempt} 次生成的 HTML 不完整，${attempt===1?'正在重试…':'请重新尝试。'}`);}
       }
       if(lastError)throw lastError;
-      const title=recordHistory(code);render(code);els.hint.textContent=`生成耗时 ${Math.round((performance.now()-startStamp)/1000)} 秒`;els.runtime.textContent=title;
-    }catch(e){showError('AI 生成未完成',e)}finally{busy=false}
+      const title=recordHistory(gameCode);render(gameCode);
+      els.hint.textContent=`本次耗时 ${Math.round((performance.now()-startStamp)/1000)} 秒`;
+      els.runtime.textContent=title;
+    }catch(e){showError('AI 生成未完成',e)}
+    finally{clearInterval(progressTicker);els.stop.hidden=true;busy=false;}
   }
   function restart(){if(!currentHTML)return;els.game.srcdoc=wrapSandbox(currentHTML);els.runtime.textContent='重玩本局';}
   els.restart.addEventListener('click',restart);
   els.next.addEventListener('click',generate);
   els.retry.addEventListener('click',generate);
+  els.stop.addEventListener('click',()=>{if(!busy)return;aborted=true;els.stop.disabled=true;els.stop.textContent='正在停止…';els.hint.textContent='已请求停止本次 AI 生成。';try{engine?.interruptGenerate?.()}catch{}});
   els.model.addEventListener('change',()=>{activeModel='';engine=null;generate()});
   window.addEventListener('message',e=>{if(e.source!==els.game.contentWindow||e.data?.quickjoy!=='runtime-error')return;els.runtime.textContent='游戏运行有异常';els.error.textContent='AI 编写的游戏运行出错：'+e.data.message;els.error.hidden=false;});
   document.addEventListener('visibilitychange',()=>{if(document.hidden&&els.game.style.display==='block')els.runtime.textContent='已暂停显示'});
