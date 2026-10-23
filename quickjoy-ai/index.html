@@ -43,7 +43,7 @@
   </section>
   <div class="controls"><button id="restart" disabled>↻ 再玩这局</button><button id="next" disabled>✦ AI 生成新游戏</button></div>
   <div class="small"><p>刷新页面也会生成新游戏。</p><select id="model" aria-label="选择本地 AI 模型"><option value="small32" selected>默认 · 0.5B Q4 + FP32</option><option value="small16">对照 · 0.5B Q4 + FP16</option><option value="large16">加强 · 1.5B Q4 + FP16</option></select></div>
-  <footer>QuickJoy AI 诊断版 v0.4 · 纯浏览器运行 · WebGPU + WebLLM · 不使用预设玩法或云端 AI<br>生成质量与速度取决于设备、浏览器及模型能力，试玩版可能出现不完整的游戏。</footer>
+  <footer>QuickJoy AI 网络诊断版 v0.5 · 纯浏览器运行 · WebGPU + WebLLM · 不使用预设玩法或云端 AI<br>生成质量与速度取决于设备、浏览器及模型能力，试玩版可能出现不完整的游戏。</footer>
 </main>
 <script type="module">
   const $ = id => document.getElementById(id);
@@ -51,6 +51,30 @@
   let engine=null, currentHTML='', busy=false, activeModel='', startStamp=0;
   let progressTicker=null, generationStartedAt=0, latestUpdateAt=0, producedChars=0, aborted=false;
   let phase='尚未启动', wasBackgrounded=false, gpuMode='未知';
+  let lastProgressText='无', currentModelSources={};
+  const isFetchFailure=err=>/Failed to fetch|Load failed|NetworkError|network request failed/i.test(String(err?.message||err||''));
+  async function networkProbe(label,url,method='HEAD'){
+    if(!url)return label+'：未能从 WebLLM 配置取得资源地址';
+    const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),8500);
+    try{
+      const res=await fetch(url,{method,signal:ctl.signal,cache:'no-store'});
+      return label+'：'+(res.ok?'请求成功':('HTTP '+res.status))+'（'+new URL(url).hostname+'）';
+    }catch(e){
+      return label+'：'+(e?.name==='AbortError'?'连接超时':'请求失败或跨域限制')+'（'+new URL(url).hostname+'）';
+    }finally{clearTimeout(timer)}
+  }
+  async function diagnoseFetch(){
+    const cfg=currentModelSources;
+    const endpoints=[];
+    if(phase==='导入 WebLLM 运行库')endpoints.push(['WebLLM 模块','https://esm.run/@mlc-ai/web-llm@0.2.85','HEAD']);
+    else{
+      if(cfg.model)endpoints.push(['模型配置',cfg.model+'/resolve/main/mlc-chat-config.json','GET']);
+      if(cfg.model_lib)endpoints.push(['WebGPU 运行库',cfg.model_lib,'HEAD']);
+    }
+    if(!endpoints.length)return '未获得下载源信息，请保留当前报错截图。';
+    const checks=await Promise.all(endpoints.map(([label,url,method])=>networkProbe(label,url,method)));
+    return checks.join(String.fromCharCode(10))+'\n注：检测只能排查基础连通性，不能证明所有模型分片都可下载。';
+  }
   const isGpuFailure=err=>/\bGPUBuffer\b|\bmapAsync\b|\bDeviceLost\b|device lost|unmapped before|mapped before/i.test(String(err?.message||err||''));
   let history=[]; try{history=JSON.parse(localStorage.getItem('quickjoy-history')||'[]').slice(-5)}catch{}
   const setStatus=(title,detail,percent=null)=>{els.heading.textContent=title;els.detail.textContent=detail;if(percent!==null)els.fill.style.width=Math.min(100,Math.max(0,percent))+'%'};
@@ -70,9 +94,16 @@
       '模型：'+(els.model.selectedOptions[0]?.textContent||'未知')+' · '+gpuMode,
       '已生成字符：'+producedChars,
       '期间切换过后台：'+(wasBackgrounded?'是':'未检测到'),
+      '模型加载的最后提示：'+lastProgressText,
       gpuError?'错误类型：WebGPU 缓冲区映射异常':'错误类型：其他生成异常',
       gpuError?'已重置推理实例。请在浏览器前台重试；如果再次失败，把出错环节和字符数告诉我。':'请记录出错环节和上面的错误信息。'
     ].join(String.fromCharCode(10));
+    if(isFetchFailure(err)){
+      els.diagnostic.textContent+=String.fromCharCode(10)+'正在检测模型下载来源…';
+      void diagnoseFetch().then(msg=>{
+        els.diagnostic.textContent+=String.fromCharCode(10)+msg;
+      }).catch(e=>{els.diagnostic.textContent+=String.fromCharCode(10)+'网络检查失败：'+String(e?.message||e);});
+    }
     setStatus(gpuError?'WebGPU 推理异常':title,gpuError?
       '推理实例可能失效；点击重试将重新创建 GPU 会话。不会切换到预设游戏。':
       '生成未成功。不会用固定小游戏替代 AI。');
@@ -104,10 +135,11 @@
     gpuMode='WebGPU · Q4 权重 / '+computeType+' 计算';
     els.device.textContent=gpuMode+(f16?' · 支持 FP16':' · 不支持 FP16');
     if(engine&&activeModel===modelId)return;
-    phase='导入 WebLLM 运行库';setStatus('正在初始化本地模型','正在加载 WebLLM 运行库…',0);els.runtime.textContent='加载模型';
+    phase='导入 WebLLM 运行库';currentModelSources={};lastProgressText='正在导入 WebLLM 模块';setStatus('正在初始化本地模型','正在加载 WebLLM 运行库…',0);els.runtime.textContent='加载模型';
     const webllm=await import('https://esm.run/@mlc-ai/web-llm@0.2.85');
+    currentModelSources=webllm.prebuiltAppConfig?.model_list?.find(m=>m.model_id===modelId)||{};
     phase='载入模型到 GPU';engine=null;
-    engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:report=>{setStatus('正在准备本地 AI（'+computeType+'）',report.text||'下载或加载模型中…',pctFromProgress(report));},logLevel:'WARN'});
+    engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:report=>{lastProgressText=report.text||'下载或加载模型中…';setStatus('正在准备本地 AI（'+computeType+'）',lastProgressText,pctFromProgress(report));},logLevel:'WARN'});
     activeModel=modelId;phase='模型已就绪';
   }
   function buildPrompt(){
