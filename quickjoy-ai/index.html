@@ -21,6 +21,8 @@
     .statusline{display:flex;align-items:center;justify-content:space-between;gap:7px;min-height:22px;color:#9298bd;font-size:11px}.statusline strong{color:#e5e6ff;font-weight:600}
     .small{display:flex;align-items:center;justify-content:space-between;gap:10px}.small select{border:1px solid #ffffff26;border-radius:9px;background:#1b2038;color:white;padding:7px 8px;font-size:11px;max-width:60%}
     .message{font-size:12px;background:#ff5a5a17;color:#ffbbbb;padding:12px;border-radius:11px;border:1px solid #ff7d7d42;line-height:1.6;overflow-wrap:anywhere}
+    .compute-note{font-size:11px;line-height:1.6;padding:10px 12px;color:#b9c3dd;border:1px solid #ffffff20;border-radius:11px;background:#ffffff08}
+    .compute-note strong{font-weight:700;color:#e4eaff}
     footer{font-size:10px;color:#7782a8;text-align:center;line-height:1.6;padding:5px}
     @keyframes scan{from{transform:translateX(0)}to{transform:translateX(185%)}}
     [hidden]{display:none!important}
@@ -43,7 +45,12 @@
   </section>
   <div class="controls"><button id="restart" disabled>↻ 再玩这局</button><button id="next" disabled>✦ AI 生成新游戏</button></div>
   <div class="small"><p>刷新页面也会生成新游戏。</p><select id="model" aria-label="选择本地 AI 模型"><option value="small32" selected>默认 · 0.5B Q4 + FP32</option><option value="small16">对照 · 0.5B Q4 + FP16</option><option value="large16">加强 · 1.5B Q4 + FP16</option></select></div>
-  <footer>QuickJoy AI 网络诊断版 v0.5 · 纯浏览器运行 · WebGPU + WebLLM · 不使用预设玩法或云端 AI<br>生成质量与速度取决于设备、浏览器及模型能力，试玩版可能出现不完整的游戏。</footer>
+  <aside class="compute-note" aria-label="本地 AI 推理方式说明">
+    <strong>当前推理：GPU（WebGPU）</strong> · 游戏 AI 在本机运行，不会调用手机 NPU。<br>
+    <strong>备用方案：</strong>浏览器 CPU（WebAssembly）推理正在评估，当前尚未开放。<br>
+    <strong>后续探索：</strong>NPU 原生加速，暂无上线时间。
+  </aside>
+  <footer>QuickJoy AI 网络诊断版 v0.6 · 纯浏览器运行 · WebGPU + WebLLM · 不使用预设玩法或云端 AI<br>生成质量与速度取决于设备、浏览器及模型能力，试玩版可能出现不完整的游戏。</footer>
 </main>
 <script type="module">
   const $ = id => document.getElementById(id);
