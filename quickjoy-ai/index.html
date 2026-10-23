@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+  <meta name="theme-color" content="#090b1a">
+  <title>QuickJoy AI · 每次都是新游戏</title>
+  <style>
+    :root{color-scheme:dark;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+    *{box-sizing:border-box}body{margin:0;min-height:100dvh;background:radial-gradient(circle at 25% 0%,#3d2367 0%,transparent 37%),radial-gradient(circle at 90% 55%,#073a51 0%,transparent 45%),#090b1a;color:#f8f8ff}
+    main{width:min(100%,520px);min-height:100dvh;margin:auto;padding:18px 14px max(25px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:12px}
+    .top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.eyebrow{font-size:11px;letter-spacing:.18em;color:#b3a5e6;font-weight:800;margin-bottom:5px}h1{font-size:27px;letter-spacing:-.04em;margin:0 0 6px}h1 span{color:#bdff8b}p{margin:0;color:#bec4df;line-height:1.5;font-size:12px}
+    .pill{background:#ffffff17;border:1px solid #ffffff20;border-radius:20px;padding:7px 10px;font-size:10px;white-space:nowrap;color:#d9d8ea}
+    .panel{background:#16192edc;border:1px solid #ffffff20;border-radius:19px;overflow:hidden;box-shadow:0 18px 55px #0007;position:relative;min-height:58dvh;flex:1;display:flex;align-items:stretch;justify-content:stretch}
+    iframe{border:0;width:100%;min-height:58dvh;background:#0d1020;display:none}
+    .overlay{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:13px;min-height:58dvh;width:100%;padding:25px 22px}
+    .orbit{width:74px;height:74px;border-radius:50%;background:conic-gradient(from 30deg,#b0fb7d,#60e9ff,#d692ff,#b0fb7d);display:grid;place-items:center;box-shadow:0 0 34px #a16ff055;animation:turn 9s linear infinite}.orbit div{width:51px;height:51px;background:#181a31;border-radius:50%;display:grid;place-items:center;font-size:23px;animation:reverseTurn 9s linear infinite}@keyframes turn{to{transform:rotate(360deg)}}@keyframes reverseTurn{to{transform:rotate(-360deg)}}
+    .big{font-size:18px;font-weight:850;line-height:1.45}.detail{font-size:12px;color:#b9bddb;max-width:300px;line-height:1.6;overflow-wrap:anywhere}.bar{height:5px;width:min(260px,80%);border-radius:9px;background:#ffffff18;overflow:hidden}.fill{height:100%;width:0%;border-radius:9px;background:linear-gradient(90deg,#c18bff,#86f8cb);transition:width .25s}.note{font-size:10px;color:#868faf}
+    .controls{display:flex;gap:9px;align-items:center}.controls button{border:0;cursor:pointer;touch-action:manipulation;border-radius:13px;min-height:52px;font-weight:850;font-size:14px;padding:12px;transition:opacity .2s}.controls button:disabled{opacity:.35;cursor:not-allowed}
+    #restart{width:38%;background:#ffffff19;color:white;border:1px solid #ffffff22}#next{flex:1;background:linear-gradient(115deg,#b1fc76,#67e7d7);color:#11162a}
+    .statusline{display:flex;align-items:center;justify-content:space-between;gap:7px;min-height:22px;color:#9298bd;font-size:11px}.statusline strong{color:#e5e6ff;font-weight:600}
+    .small{display:flex;align-items:center;justify-content:space-between;gap:10px}.small select{border:1px solid #ffffff26;border-radius:9px;background:#1b2038;color:white;padding:7px 8px;font-size:11px;max-width:60%}
+    .message{font-size:12px;background:#ff5a5a17;color:#ffbbbb;padding:12px;border-radius:11px;border:1px solid #ff7d7d42;line-height:1.6;overflow-wrap:anywhere}
+    footer{font-size:10px;color:#7782a8;text-align:center;line-height:1.6;padding:5px}
+    [hidden]{display:none!important}
+  </style>
+</head>
+<body>
+<main>
+  <div class="top"><div><div class="eyebrow">BROWSER-NATIVE AI ARCADE</div><h1>QuickJoy <span>AI</span></h1><p>一次一个脑洞，点、划、拖，玩完就换。</p></div><div class="pill">🧠 本地生成</div></div>
+  <div class="statusline"><span id="device">正在检测设备…</span><strong id="runtime">等待启动</strong></div>
+  <section class="panel">
+    <div id="overlay" class="overlay">
+      <div class="orbit"><div>✨</div></div><div class="big" id="heading">正在检查本地 AI 环境</div>
+      <div class="detail" id="detail">首次使用需下载模型；之后会从浏览器缓存中加载。</div>
+      <div class="bar"><div id="fill" class="fill"></div></div>
+      <div class="note" id="hint">不会上传游戏操作数据，游戏代码由你的设备生成。</div>
+      <div class="message" id="error" hidden></div>
+      <button id="retry" hidden style="border:0;border-radius:12px;background:#b4fb80;padding:12px 22px;font-weight:800;color:#13192d">重新尝试</button>
+    </div>
+    <iframe id="game" title="AI 为你生成的小游戏" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+  </section>
+  <div class="controls"><button id="restart" disabled>↻ 再玩这局</button><button id="next" disabled>✦ AI 生成新游戏</button></div>
+  <div class="small"><p>刷新页面也会生成新游戏。</p><select id="model" aria-label="选择本地 AI 模型"><option value="small">轻量 · Coder 0.5B</option><option value="large">加强 · Coder 1.5B</option></select></div>
+  <footer>纯浏览器运行 · WebGPU + WebLLM · 不使用预设玩法或云端 AI<br>生成质量与速度取决于设备、浏览器及模型能力，试玩版可能出现不完整的游戏。</footer>
+</main>
+<script type="module">
+  const $ = id => document.getElementById(id);
+  const els = { overlay:$('overlay'),game:$('game'), heading:$('heading'),detail:$('detail'),fill:$('fill'),hint:$('hint'),error:$('error'),retry:$('retry'),device:$('device'),runtime:$('runtime'),restart:$('restart'),next:$('next'),model:$('model') };
+  let engine=null, currentHTML='', busy=false, activeModel='', startStamp=0;
+  let history=[]; try{history=JSON.parse(localStorage.getItem('quickjoy-history')||'[]').slice(-5)}catch{}
+  const setStatus=(title,detail,percent=null)=>{els.heading.textContent=title;els.detail.textContent=detail;if(percent!==null)els.fill.style.width=Math.min(100,Math.max(0,percent))+'%'};
+  const showLoading=()=>{els.overlay.hidden=false;els.game.style.display='none';els.restart.disabled=true;els.next.disabled=true;els.error.hidden=true;els.retry.hidden=true;};
+  const showError=(title,err)=>{busy=false;els.runtime.textContent='需要处理';els.overlay.hidden=false;els.game.style.display='none';els.error.hidden=false;els.retry.hidden=false;els.retry.textContent='重试 AI 生成';els.error.textContent=String(err?.message||err||'未知错误').slice(0,850);setStatus(title,'不会用固定小游戏替代 AI。请检查浏览器、网络和设备资源。');els.restart.disabled=!currentHTML;els.next.disabled=true};
+  const pctFromProgress=report=>{if(typeof report?.progress==='number')return Math.min(100,Math.round(report.progress*100));return null};
+  const cleanResponse=text=>{let out=String(text||'').trim().replace(/^```(?:html)?\s*/i,'').replace(/\s*```$/,'');const start=out.search(/<!doctype\s+html|<html\b/i);if(start>0)out=out.slice(start);const end=out.search(/<\/html>/i);if(end>=0)out=out.slice(0,end+7);return out};
+  function checkResponse(code){if(!/<html\b/i.test(code)||!/<script\b/i.test(code)||!/<\/script>/i.test(code)||!/<\/html>/i.test(code))throw new Error('AI 没有输出完整的 HTML 游戏。');if(code.length<600)throw new Error('AI 输出的小游戏过短，无法可靠运行。');if(code.length>45000)throw new Error('AI 输出超出试玩版允许的代码长度。');return code;}
+  const securityHeader = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none'; img-src data: blob:; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; media-src 'none'">`;
+  const errorBridge = `<script>window.addEventListener('error',function(e){parent.postMessage({quickjoy:'runtime-error',message:String(e.message||'运行错误')},'*')});window.addEventListener('unhandledrejection',function(e){parent.postMessage({quickjoy:'runtime-error',message:String(e.reason||'异步错误')},'*')});<\/script>`;
+  function wrapSandbox(code){return code.replace(/<head(\s[^>]*)?>/i,match=>match+securityHeader+errorBridge)}
+  function render(code){currentHTML=code;els.overlay.hidden=true;els.game.style.display='block';els.game.srcdoc=wrapSandbox(code);els.restart.disabled=false;els.next.disabled=false;els.runtime.textContent='正在游玩';}
+  const ideas = ()=>{const b=new Uint32Array(4);crypto.getRandomValues(b);return [...b].map(x=>x.toString(36)).join('-')};
+  async function setup(){
+    if(!navigator.gpu)throw new Error('当前浏览器未提供 WebGPU。请使用支持 WebGPU 的新版手机浏览器，避免在应用内置浏览器中打开。');
+    const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw new Error('浏览器无法取得 GPU 适配器。请尝试系统 Chrome / Safari、更新系统或关闭省电限制。');
+    const f16=adapter.features?.has('shader-f16');
+    const size=els.model.value;
+    const modelId=size==='large'?'Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC':(f16?'Qwen2.5-Coder-0.5B-Instruct-q4f16_1-MLC':'Qwen2.5-Coder-0.5B-Instruct-q4f32_1-MLC');
+    if(size==='large'&&!f16)throw new Error('当前 GPU 不支持 1.5B 模型所需的 shader-f16。请手动选择轻量版。');
+    els.device.textContent=f16?'WebGPU · FP16 可用':'WebGPU · 兼容模式';
+    if(engine&&activeModel===modelId)return;
+    setStatus('正在初始化本地模型','正在加载 WebLLM 运行库…',0);els.runtime.textContent='加载模型';
+    const webllm=await import('https://esm.run/@mlc-ai/web-llm@0.2.85');
+    engine=null;
+    engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:report=>{setStatus('正在准备本地 AI',report.text||'下载或加载模型中…',pctFromProgress(report));},logLevel:'WARN'});
+    activeModel=modelId;
+  }
+  function buildPrompt(){
+    const recent=history.map(h=>`${h.title}: ${h.idea}`).join(' / ')||'无';
+    return [{role:'system',content:`You invent and CODE a surprising, fully playable, MOBILE browser micro-game. Respond with raw COMPLETE HTML only: a full doctype, html, head, style, body, and a complete inline JavaScript script element, all with matching closing tags. No markdown, no preface. Make the entire game self-contained: inline CSS/JS, procedural Canvas drawing, emojis or inline SVG you invent. NO external URLs, images, fonts, frameworks, import, fetch or network. No predefined genre; invent the gameplay, controls, scoring and distinct visual identity yourself. The player interacts with 1 or 2 fingers by touch/drag/tap, must be easy to understand in 2 seconds, responsive to mobile viewport, fun and tactile, colorful with particles/juice. Aim for 12-25 seconds per round and show a clear ending/win-or-score screen. Canvas or DOM valid. Support touch and mouse with pointer events, preventDefault for touch. Use requestAnimationFrame and safe basic browser APIs. Keep JS short (<=1200 words) but FUNCTIONAL. Include an HTML <title> as a game title. At the top of the HTML add <!-- IDEA: describe central mechanic briefly -->. DO NOT reuse known popular games or the most basic examples. Prioritize novelty, robust JS and high feedback. All rules, art and code must be authored by YOU. Must not reference external code or unknown assets. No onclick string attributes.`},
+    {role:'user',content:`Invent an entirely new micro-game. Diversity nonce: ${ideas()}. The previous ideas were: ${recent}. Do NOT repeat their interaction or goals. Make one unique satisfying 15-30 second game playable on a phone. Create complete, syntactically valid HTML including real script with event listeners. Output HTML ONLY.`}];
+  }
+  function recordHistory(code){const title=(code.match(/<title[^>]*>([^<]{1,80})<\/title>/i)||[])[1]||'未命名';const idea=(code.match(/<!--\s*IDEA:\s*([\s\S]{1,160}?)\s*-->/i)||[])[1]||'AI 实验玩法';history.push({title,idea});history=history.slice(-5);try{localStorage.setItem('quickjoy-history',JSON.stringify(history))}catch{}return title}
+  async function generate(){
+    if(busy)return;busy=true;showLoading();startStamp=performance.now();
+    try{
+      await setup();els.runtime.textContent='AI 编写游戏';setStatus('AI 正在创造一款新游戏','玩法、交互、素材和代码都在本机生成。',100);
+      let code='';let lastError;
+      for(let attempt=1;attempt<=2;attempt++){
+        const prompts=buildPrompt();if(attempt>1)prompts[1].content+=' Previous response was incomplete. Strictly write valid full HTML.';
+        const reply=await engine.chat.completions.create({messages:prompts,temperature:0.92,top_p:0.94,max_tokens:2100});
+        try{code=checkResponse(cleanResponse(reply.choices?.[0]?.message?.content));lastError=null;break;}catch(e){lastError=e;setStatus('AI 正在修补输出',`第 ${attempt} 次输出不完整，尝试重新生成…`,100);}
+      }
+      if(lastError)throw lastError;
+      const title=recordHistory(code);render(code);els.hint.textContent=`生成耗时 ${Math.round((performance.now()-startStamp)/1000)} 秒`;els.runtime.textContent=title;
+    }catch(e){showError('AI 生成未完成',e)}finally{busy=false}
+  }
+  function restart(){if(!currentHTML)return;els.game.srcdoc=wrapSandbox(currentHTML);els.runtime.textContent='重玩本局';}
+  els.restart.addEventListener('click',restart);
+  els.next.addEventListener('click',generate);
+  els.retry.addEventListener('click',generate);
+  els.model.addEventListener('change',()=>{activeModel='';engine=null;generate()});
+  window.addEventListener('message',e=>{if(e.source!==els.game.contentWindow||e.data?.quickjoy!=='runtime-error')return;els.runtime.textContent='游戏运行有异常';els.error.textContent='AI 编写的游戏运行出错：'+e.data.message;els.error.hidden=false;});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden&&els.game.style.display==='block')els.runtime.textContent='已暂停显示'});
+  generate();
+</script>
+</body>
+</html>
