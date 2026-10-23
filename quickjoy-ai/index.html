@@ -36,24 +36,48 @@
       <div class="detail" id="detail">首次使用需下载模型；之后会从浏览器缓存中加载。</div>
       <div class="bar"><div id="fill" class="fill"></div></div>
       <div class="note" id="hint">不会上传游戏操作数据，游戏代码由你的设备生成。</div>
-      <div class="message" id="error" hidden></div>
+      <div class="message" id="error" hidden></div><div class="detail" id="diagnostic" hidden style="font-size:11px;max-width:300px;white-space:pre-wrap;text-align:left;border-top:1px solid #ffffff22;padding-top:8px"></div>
       <button id="retry" hidden style="border:0;border-radius:12px;background:#b4fb80;padding:12px 22px;font-weight:800;color:#13192d">重新尝试</button><button id="stop" hidden style="border:1px solid #ffffff44;border-radius:12px;background:#303752;color:#fff;padding:10px 20px;font-weight:700">停止生成</button>
     </div>
     <iframe id="game" title="AI 为你生成的小游戏" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
   </section>
   <div class="controls"><button id="restart" disabled>↻ 再玩这局</button><button id="next" disabled>✦ AI 生成新游戏</button></div>
   <div class="small"><p>刷新页面也会生成新游戏。</p><select id="model" aria-label="选择本地 AI 模型"><option value="small">轻量 · Coder 0.5B</option><option value="large">加强 · Coder 1.5B</option></select></div>
-  <footer>纯浏览器运行 · WebGPU + WebLLM · 不使用预设玩法或云端 AI<br>生成质量与速度取决于设备、浏览器及模型能力，试玩版可能出现不完整的游戏。</footer>
+  <footer>QuickJoy AI 诊断版 v0.3 · 纯浏览器运行 · WebGPU + WebLLM · 不使用预设玩法或云端 AI<br>生成质量与速度取决于设备、浏览器及模型能力，试玩版可能出现不完整的游戏。</footer>
 </main>
 <script type="module">
   const $ = id => document.getElementById(id);
-  const els = { overlay:$('overlay'),game:$('game'), heading:$('heading'),detail:$('detail'),fill:$('fill'),hint:$('hint'),error:$('error'),retry:$('retry'),stop:$('stop'),device:$('device'),runtime:$('runtime'),restart:$('restart'),next:$('next'),model:$('model') };
+  const els = { overlay:$('overlay'),game:$('game'), heading:$('heading'),detail:$('detail'),fill:$('fill'),hint:$('hint'),error:$('error'),diagnostic:$('diagnostic'),retry:$('retry'),stop:$('stop'),device:$('device'),runtime:$('runtime'),restart:$('restart'),next:$('next'),model:$('model') };
   let engine=null, currentHTML='', busy=false, activeModel='', startStamp=0;
   let progressTicker=null, generationStartedAt=0, latestUpdateAt=0, producedChars=0, aborted=false;
+  let phase='尚未启动', wasBackgrounded=false, gpuMode='未知';
+  const isGpuFailure=err=>/\bGPUBuffer\b|\bmapAsync\b|\bDeviceLost\b|device lost|unmapped before|mapped before/i.test(String(err?.message||err||''));
   let history=[]; try{history=JSON.parse(localStorage.getItem('quickjoy-history')||'[]').slice(-5)}catch{}
   const setStatus=(title,detail,percent=null)=>{els.heading.textContent=title;els.detail.textContent=detail;if(percent!==null)els.fill.style.width=Math.min(100,Math.max(0,percent))+'%'};
-  const showLoading=()=>{els.overlay.hidden=false;els.game.style.display='none';els.restart.disabled=true;els.next.disabled=true;els.error.hidden=true;els.retry.hidden=true;els.stop.hidden=true;els.model.disabled=true;els.fill.style.animation='none';els.hint.textContent='模型在本机运行；生成游戏代码需要额外时间。';};
-  const showError=(title,err)=>{busy=false;clearInterval(progressTicker);els.fill.style.animation='none';els.stop.hidden=true;els.model.disabled=false;els.runtime.textContent='需要处理';els.overlay.hidden=false;els.game.style.display='none';els.error.hidden=false;els.retry.hidden=false;els.retry.textContent='重试 AI 生成';els.error.textContent=String(err?.message||err||'未知错误').slice(0,850);setStatus(title,'不会用固定小游戏替代 AI。请检查浏览器、网络和设备资源。');els.restart.disabled=!currentHTML;els.next.disabled=true};
+  const showLoading=()=>{els.overlay.hidden=false;els.game.style.display='none';els.restart.disabled=true;els.next.disabled=true;els.error.hidden=true;els.retry.hidden=true;els.stop.hidden=true;els.model.disabled=true;els.diagnostic.hidden=true;els.fill.style.animation='none';els.hint.textContent='模型在本机运行；生成游戏代码需要额外时间。';};
+  const showError=(title,err)=>{
+    busy=false;clearInterval(progressTicker);els.fill.style.animation='none';
+    els.stop.hidden=true;els.model.disabled=false;
+    els.runtime.textContent='需要处理';els.overlay.hidden=false;els.game.style.display='none';
+    els.error.hidden=false;els.retry.hidden=false;
+    const gpuError=isGpuFailure(err);
+    if(gpuError){engine=null;activeModel='';}
+    els.retry.textContent=gpuError?'重建 GPU 并重试':'重试 AI 生成';
+    els.error.textContent=String(err?.message||err||'未知错误').slice(0,850);
+    els.diagnostic.hidden=false;
+    els.diagnostic.textContent=[
+      '出错环节：'+phase,
+      '模型：'+(els.model.value==='small'?'Coder 0.5B':'Coder 1.5B')+' · '+gpuMode,
+      '已生成字符：'+producedChars,
+      '期间切换过后台：'+(wasBackgrounded?'是':'未检测到'),
+      gpuError?'错误类型：WebGPU 缓冲区映射异常':'错误类型：其他生成异常',
+      gpuError?'已重置推理实例。请在浏览器前台重试；如果再次失败，把出错环节和字符数告诉我。':'请记录出错环节和上面的错误信息。'
+    ].join(String.fromCharCode(10));
+    setStatus(gpuError?'WebGPU 推理异常':title,gpuError?
+      '推理实例可能失效；点击重试将重新创建 GPU 会话。不会切换到预设游戏。':
+      '生成未成功。不会用固定小游戏替代 AI。');
+    els.restart.disabled=!currentHTML;els.next.disabled=true;
+  };
   const pctFromProgress=report=>{if(typeof report?.progress==='number')return Math.min(100,Math.round(report.progress*100));return null};
   const cleanResponse=text=>{let out=String(text||'').trim().replace(/^```(?:html)?\s*/i,'').replace(/\s*```$/,'');const start=out.search(/<!doctype\s+html|<html\b/i);if(start>0)out=out.slice(start);const end=out.search(/<\/html>/i);if(end>=0)out=out.slice(0,end+7);return out};
   function checkResponse(code){if(!/<html\b/i.test(code)||!/<script\b/i.test(code)||!/<\/script>/i.test(code)||!/<\/html>/i.test(code))throw new Error('AI 没有输出完整的 HTML 游戏。');if(code.length<600)throw new Error('AI 输出的小游戏过短，无法可靠运行。');if(code.length>45000)throw new Error('AI 输出超出试玩版允许的代码长度。');return code;}
@@ -63,19 +87,20 @@
   function render(code){currentHTML=code;clearInterval(progressTicker);els.fill.style.animation='none';els.stop.hidden=true;els.model.disabled=false;els.overlay.hidden=true;els.game.style.display='block';els.game.srcdoc=wrapSandbox(code);els.restart.disabled=false;els.next.disabled=false;els.runtime.textContent='正在游玩';}
   const ideas = ()=>{const b=new Uint32Array(4);crypto.getRandomValues(b);return [...b].map(x=>x.toString(36)).join('-')};
   async function setup(){
+    phase='检测 WebGPU';
     if(!navigator.gpu)throw new Error('当前浏览器未提供 WebGPU。请使用支持 WebGPU 的新版手机浏览器，避免在应用内置浏览器中打开。');
     const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw new Error('浏览器无法取得 GPU 适配器。请尝试系统 Chrome / Safari、更新系统或关闭省电限制。');
-    const f16=adapter.features?.has('shader-f16');
+    const f16=adapter.features?.has('shader-f16');gpuMode=f16?'WebGPU FP16':'WebGPU 兼容模式';
     const size=els.model.value;
     const modelId=size==='large'?'Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC':(f16?'Qwen2.5-Coder-0.5B-Instruct-q4f16_1-MLC':'Qwen2.5-Coder-0.5B-Instruct-q4f32_1-MLC');
     if(size==='large'&&!f16)throw new Error('当前 GPU 不支持 1.5B 模型所需的 shader-f16。请手动选择轻量版。');
     els.device.textContent=f16?'WebGPU · FP16 可用':'WebGPU · 兼容模式';
     if(engine&&activeModel===modelId)return;
-    setStatus('正在初始化本地模型','正在加载 WebLLM 运行库…',0);els.runtime.textContent='加载模型';
+    phase='导入 WebLLM 运行库';setStatus('正在初始化本地模型','正在加载 WebLLM 运行库…',0);els.runtime.textContent='加载模型';
     const webllm=await import('https://esm.run/@mlc-ai/web-llm@0.2.85');
-    engine=null;
+    phase='载入模型到 GPU';engine=null;
     engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:report=>{setStatus('正在准备本地 AI',report.text||'下载或加载模型中…',pctFromProgress(report));},logLevel:'WARN'});
-    activeModel=modelId;
+    activeModel=modelId;phase='模型已就绪';
   }
   function buildPrompt(){
     const recent=history.map(h=>`${h.title}: ${h.idea}`).join(' / ')||'无';
@@ -99,10 +124,10 @@
   }
   async function generate(){
     if(busy)return;
-    busy=true;aborted=false;showLoading();els.stop.disabled=false;els.stop.textContent='停止生成';generationStartedAt=0;startStamp=performance.now();
+    busy=true;aborted=false;wasBackgrounded=false;phase='准备模型';showLoading();els.stop.disabled=false;els.stop.textContent='停止生成';generationStartedAt=0;producedChars=0;startStamp=performance.now();
     try{
       await setup();
-      generationStartedAt=performance.now();latestUpdateAt=generationStartedAt;producedChars=0;
+      phase='生成游戏代码（GPU 推理）';generationStartedAt=performance.now();latestUpdateAt=generationStartedAt;producedChars=0;
       els.fill.style.width='35%';els.fill.style.animation='scan 1.2s ease-in-out infinite alternate';
       els.stop.hidden=false;els.hint.textContent='模型已加载完成；下方显示 AI 实际生成的字符数量，不是下载进度。';
       generationStatus();progressTicker=setInterval(generationStatus,1000);
@@ -114,10 +139,10 @@
         const prompts=buildPrompt();
         if(attempt>1)prompts[1].content+=' Previous response was incomplete. Keep output compact and always finish all closing HTML tags.';
         gameCode='';
-        const chunks=await engine.chat.completions.create({
+        phase='调用 GPU 推理：第 '+attempt+' 次';const chunks=await engine.chat.completions.create({
           messages:prompts,temperature:0.82,top_p:0.92,max_tokens:2100,stream:true
         });
-        for await(const chunk of chunks){
+        phase='接收模型输出：第 '+attempt+' 次';for await(const chunk of chunks){
           if(aborted)throw new Error('生成已停止或超时（4 分钟）。请点击重试。');
           const addition=chunk.choices?.[0]?.delta?.content||'';
           if(addition){gameCode+=addition;producedChars=gameCode.length;latestUpdateAt=performance.now();}
@@ -127,7 +152,7 @@
         catch(e){lastError=e;setStatus('AI 生成内容不完整',`第 ${attempt} 次生成的 HTML 不完整，${attempt===1?'正在重试…':'请重新尝试。'}`);}
       }
       if(lastError)throw lastError;
-      const title=recordHistory(gameCode);render(gameCode);
+      phase='校验并运行小游戏';const title=recordHistory(gameCode);render(gameCode);
       els.hint.textContent=`本次耗时 ${Math.round((performance.now()-startStamp)/1000)} 秒`;
       els.runtime.textContent=title;
     }catch(e){showError('AI 生成未完成',e)}
@@ -140,7 +165,10 @@
   els.stop.addEventListener('click',()=>{if(!busy)return;aborted=true;els.stop.disabled=true;els.stop.textContent='正在停止…';els.hint.textContent='已请求停止本次 AI 生成。';try{engine?.interruptGenerate?.()}catch{}});
   els.model.addEventListener('change',()=>{activeModel='';engine=null;generate()});
   window.addEventListener('message',e=>{if(e.source!==els.game.contentWindow||e.data?.quickjoy!=='runtime-error')return;els.runtime.textContent='游戏运行有异常';els.error.textContent='AI 编写的游戏运行出错：'+e.data.message;els.error.hidden=false;});
-  document.addEventListener('visibilitychange',()=>{if(document.hidden&&els.game.style.display==='block')els.runtime.textContent='已暂停显示'});
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden&&busy)wasBackgrounded=true;
+    if(document.hidden&&els.game.style.display==='block')els.runtime.textContent='已暂停显示';
+  });
   generate();
 </script>
 </body>
